@@ -16,6 +16,11 @@ var fetchImage = utils.GetWithClearance
 
 func GetImage(c *gin.Context) {
 
+	if c.MustGet("disable_images").(bool) {
+		c.AbortWithStatus(403)
+		return
+	}
+
 	authorization := c.Query("auth")
 	if authorization == "" {
 		c.String(400, "Missing auth token")
