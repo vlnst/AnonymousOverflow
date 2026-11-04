@@ -13,6 +13,8 @@ import (
 	"github.com/golang-jwt/jwt/v4"
 )
 
+var fetchImage = utils.GetWithClearance
+
 func GetImage(c *gin.Context) {
 
 	authorization := c.Query("auth")
@@ -53,19 +55,21 @@ func GetImage(c *gin.Context) {
 	}
 
 	// download the image
-	resp, err := utils.GetWithClearance(c.Request.Context(), claims.ImageURL)
+	resp, err := fetchImage(c.Request.Context(), claims.ImageURL)
 	if err != nil {
 		c.AbortWithStatus(500)
 		return
 	}
-	if resp.StatusCode() != http.StatusOK {
+	if resp == nil || resp.StatusCode() != http.StatusOK {
 		c.AbortWithStatus(http.StatusBadGateway)
 		return
 	}
 	defer resp.RawBody().Close()
 
-	// set the content type
-	c.Header("Content-Type", resp.Header().Get("Content-Type"))
+	if !setImageHeaders(c, resp.Header().Get("Content-Type")) {
+		c.AbortWithStatus(502)
+		return
+	}
 
 	// write the image to the response
 	io.Copy(c.Writer, resp.RawBody())
