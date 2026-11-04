@@ -4,6 +4,7 @@ import (
 	"anonymousoverflow/src/types"
 	"anonymousoverflow/src/utils"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"time"
@@ -52,7 +53,7 @@ func GetImage(c *gin.Context) {
 	}
 
 	// download the image
-	resp, err := utils.GetWithClearance(claims.ImageURL)
+	resp, err := utils.GetWithClearance(c.Request.Context(), claims.ImageURL)
 	if err != nil {
 		c.AbortWithStatus(500)
 		return
@@ -61,10 +62,11 @@ func GetImage(c *gin.Context) {
 		c.AbortWithStatus(http.StatusBadGateway)
 		return
 	}
+	defer resp.RawBody().Close()
 
 	// set the content type
 	c.Header("Content-Type", resp.Header().Get("Content-Type"))
 
 	// write the image to the response
-	c.Writer.Write(resp.Body())
+	io.Copy(c.Writer, resp.RawBody())
 }

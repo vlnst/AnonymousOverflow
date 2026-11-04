@@ -1,6 +1,7 @@
 package utils
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -46,11 +47,21 @@ var (
 	solveMu sync.Mutex
 )
 
-const solveTimeout = 60 * time.Second
+const SolveTimeout = 60 * time.Second
+
+var (
+	newUpstreamClient = func() *resty.Client {
+		return resty.New().SetTransport(NewPublicOnlyTransport())
+	}
+	upstreamGuard = CheckPublicURL
+)
 
 // GetWithClearance fetches target, solving a Cloudflare challenge through
 // FlareSolverr (FLARESOLVERR_URL) when the host answers with 403.
-func GetWithClearance(target string) (*resty.Response, error) {
+func GetWithClearance(ctx context.Context, target string) (*resty.Response, error) {
+	if err := upstreamGuard(ctx, target); err != nil {
+		return nil, err
+	}
 	u, err := url.Parse(target)
 	if err != nil {
 		return nil, err
@@ -61,20 +72,23 @@ func GetWithClearance(target string) (*resty.Response, error) {
 	cl := clearances[host]
 	clearancesMu.Unlock()
 
-	res, err := getWith(target, cl)
+	res, err := getWith(ctx, target, cl)
 	if err != nil || res.StatusCode() != http.StatusForbidden || os.Getenv("FLARESOLVERR_URL") == "" {
 		return res, err
 	}
 
 	finalURL := res.RawResponse.Request.URL
 	target = finalURL.String()
+	if err := upstreamGuard(ctx, target); err != nil {
+		return nil, err
+	}
 	if finalURL.Hostname() != host {
 		host = finalURL.Hostname()
 		clearancesMu.Lock()
 		cl = clearances[host]
 		clearancesMu.Unlock()
 		if cl != nil {
-			res, err = getWith(target, cl)
+			res, err = getWith(ctx, target, cl)
 			if err != nil || res.StatusCode() != http.StatusForbidden {
 				return res, err
 			}
@@ -86,16 +100,16 @@ func GetWithClearance(target string) (*resty.Response, error) {
 		return nil, err
 	}
 
-	return getWith(target, cl)
+	return getWith(ctx, target, cl)
 }
 
-func getWith(target string, cl *clearance) (*resty.Response, error) {
-	client := resty.New()
+func getWith(ctx context.Context, target string, cl *clearance) (*resty.Response, error) {
+	client := newUpstreamClient()
 	if cl != nil {
 		client.GetClient().Jar.SetCookies(cl.url, cl.cookies)
 		client.SetHeader("User-Agent", cl.userAgent)
 	}
-	return client.R().Get(target)
+	return client.R().SetContext(ctx).SetDoNotParseResponse(true).Get(target)
 }
 
 func solve(host, target string, stale *clearance) (*clearance, error) {
@@ -119,11 +133,11 @@ func solve(host, target string, stale *clearance) (*clearance, error) {
 		var fsRes flaresolverrResponse
 		// maxTimeout only bounds the solve inside FlareSolverr; the HTTP timeout
 		// keeps a hung FlareSolverr from holding solveMu forever.
-		res, err := resty.New().SetTimeout(solveTimeout + 30*time.Second).R().
+		res, err := resty.New().SetTimeout(SolveTimeout + 30*time.Second).R().
 			SetBody(map[string]any{
 				"cmd":               "request.get",
 				"url":               target,
-				"maxTimeout":        solveTimeout.Milliseconds(),
+				"maxTimeout":        SolveTimeout.Milliseconds(),
 				"returnOnlyCookies": true,
 			}).
 			SetResult(&fsRes).

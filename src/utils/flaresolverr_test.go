@@ -1,10 +1,13 @@
 package utils
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -177,6 +180,12 @@ func TestGetWithClearanceAcrossHosts(t *testing.T) {
 		delete(clearances, "localhost")
 		clearancesMu.Unlock()
 	}()
+	// The upstreams here are loopback test servers; lift the public-address
+	// guard for this test only.
+	origGuard, origDial := upstreamGuard, dialAllowed
+	upstreamGuard = func(context.Context, string) error { return nil }
+	dialAllowed = func(netip.AddrPort) bool { return true }
+	defer func() { upstreamGuard, dialAllowed = origGuard, origDial }()
 
 	for _, tc := range []struct {
 		name       string
@@ -189,12 +198,16 @@ func TestGetWithClearanceAcrossHosts(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			atomic.StoreInt32(&generation, tc.generation)
-			res, err := GetWithClearance(origin.URL + "/old.png")
+			res, err := GetWithClearance(context.Background(), origin.URL+"/old.png")
 			if err != nil {
 				t.Fatal(err)
 			}
-			if res.StatusCode() != http.StatusOK || string(res.Body()) != "image bytes" {
-				t.Fatalf("image status=%d body=%q", res.StatusCode(), res.Body())
+			body, err := io.ReadAll(res.RawBody())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if res.StatusCode() != http.StatusOK || string(body) != "image bytes" {
+				t.Fatalf("image status=%d body=%q", res.StatusCode(), body)
 			}
 			if calls := atomic.LoadInt32(&solverCalls); calls != tc.calls {
 				t.Fatalf("solver calls=%d, want %d", calls, tc.calls)
@@ -205,7 +218,7 @@ func TestGetWithClearanceAcrossHosts(t *testing.T) {
 	clearancesMu.Lock()
 	cl := clearances["localhost"]
 	clearancesMu.Unlock()
-	res, err := getWith(origin.URL+"/old.png", cl)
+	res, err := getWith(context.Background(), origin.URL+"/old.png", cl)
 	if err != nil {
 		t.Fatal(err)
 	}
