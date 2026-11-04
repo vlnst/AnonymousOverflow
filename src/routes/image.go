@@ -4,7 +4,6 @@ import (
 	"anonymousoverflow/src/types"
 	"anonymousoverflow/src/utils"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"time"
@@ -54,8 +53,11 @@ func GetImage(c *gin.Context) {
 		return
 	}
 
+	ctx, cancel := imageFetchContext(c)
+	defer cancel()
+
 	// download the image
-	resp, err := fetchImage(c.Request.Context(), claims.ImageURL)
+	resp, err := fetchImage(ctx, claims.ImageURL)
 	if err != nil {
 		c.AbortWithStatus(500)
 		return
@@ -71,6 +73,5 @@ func GetImage(c *gin.Context) {
 		return
 	}
 
-	// write the image to the response
-	io.Copy(c.Writer, resp.RawBody())
+	writeImageBody(c.Writer, resp.RawBody())
 }
